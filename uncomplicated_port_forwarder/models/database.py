@@ -1,3 +1,6 @@
+# Copyright (C) 2024-2025 Bruno Bernard
+# SPDX-License-Identifier: Apache-2.0
+
 from pathlib import Path
 import sqlite3
 import os

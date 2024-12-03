@@ -1,3 +1,6 @@
+# Copyright (C) 2024-2025 Bruno Bernard
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 import sys
 import socket
