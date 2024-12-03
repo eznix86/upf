@@ -1,146 +1,225 @@
 # Copyright (C) 2024-2025 Bruno Bernard
 # SPDX-License-Identifier: Apache-2.0
 
-import iptc
+import subprocess
+import uuid
 import click
-import ipaddress
-
-UPF_TAG = "managed_by_upf"
-
-
-def rule_exists(chain, rule):
-    """
-    Check if a rule exists in a chain.
-    """
-    return any(r == rule for r in chain.rules)
-
-
-def add_rule(ip, host_port, other_port, protocol):
-    """
-    Add a port forwarding rule with a UPF tag.
-    """
-    # Add PREROUTING rule
-    prerouting_chain = iptc.Chain(iptc.Table(iptc.Table.NAT), "PREROUTING")
-    rule = iptc.Rule()
-    rule.protocol = protocol
-    match = rule.create_match(protocol)
-    match.dport = str(host_port)
-    rule.target = iptc.Target(rule, "DNAT")
-    rule.target.to_destination = f"{ip}:{other_port}"
-    rule.comment = UPF_TAG
-
-    if not rule_exists(prerouting_chain, rule):
-        prerouting_chain.insert_rule(rule)
-        click.echo(
-            f"Added {protocol.upper()} forwarding: {host_port} -> {ip}:{other_port}"
-        )
-    else:
-        click.echo(
-            f"{protocol.upper()} rule already exists: {host_port} -> {ip}:{other_port}"
-        )
-
-    # Add POSTROUTING rule
-    postrouting_chain = iptc.Chain(iptc.Table(iptc.Table.NAT), "POSTROUTING")
-    rule = iptc.Rule()
-    rule.protocol = protocol
-    rule.target = iptc.Target(rule, "MASQUERADE")
-    rule.comment = UPF_TAG
-
-    if not rule_exists(postrouting_chain, rule):
-        postrouting_chain.insert_rule(rule)
-
-
-def add_multiple(gateway, start_port, protocol, dest_port=22):
-    """
-    Add a range of port forwarding rules for a subnet.
-    """
-    ip_network = ipaddress.ip_network(gateway, strict=False)
-    current_port = start_port
-
-    for ip in ip_network.hosts():
-        # Skip the network and broadcast addresses
-        if ip in [ip_network.network_address, ip_network.broadcast_address]:
-            continue
-        try:
-            add_rule(str(ip), current_port, dest_port, protocol)
-            click.echo(f"Forwarded {current_port} -> {ip}:{dest_port}")
-            current_port += 1
-        except ValueError as e:
-            click.echo(f"Error: {e}")
-            break
-
-
-def list_rules():
-    """
-    List all NAT rules managed by UPF.
-    """
-    table = iptc.Table(iptc.Table.NAT)
-    table.refresh()
-    click.echo("Managed NAT Rules:")
-    for chain_name in ["PREROUTING", "POSTROUTING"]:
-        chain = iptc.Chain(table, chain_name)
-        for rule in chain.rules:
-            if UPF_TAG in rule.comment:
-                click.echo(f"- {rule}")
-
-
-def delete_rule(host_port, protocol):
-    """
-    Delete a specific forwarding rule managed by UPF.
-    """
-    chain = iptc.Chain(iptc.Table(iptc.Table.NAT), "PREROUTING")
-    for rule in chain.rules:
-        if (
-            UPF_TAG in rule.comment
-            and rule.protocol == protocol
-            and any(match.dport == str(host_port) for match in rule.matches)
-        ):
-            chain.delete_rule(rule)
-            click.echo(f"Deleted {protocol.upper()} rule for port {host_port}")
-            return
-    click.echo(f"No managed {protocol.upper()} rule found for port {host_port}")
+import re
+from .models.port_forward import PortForward
+from .models.upf import UPF
+from .models.database import Database
+from .utils import (
+    calculate_ip_range,
+    parse_port_spec,
+    require_root,
+    validate_ip,
+    validate_port,
+    validate_port_range,
+    validate_start_at,
+    validate_subnet,
+)
 
 
 @click.group()
+@require_root
 def cli():
-    """Uncomplicated Port Forwarder (UPF)"""
-    pass
+    """UPF - Uncomplicated Port Forwarder"""
+    Database.migrate()
 
 
 @cli.command()
-@click.argument("ip")
-@click.argument("ports")
+@click.argument("port_spec")
+@click.argument("destination")
 @click.option("--udp", is_flag=True, help="Use UDP instead of TCP")
-def add(ip, ports, udp):
-    """Add a port forwarding rule"""
-    host_port, other_port = map(int, ports.split(":"))
-    protocol = "udp" if udp else "tcp"
-    add_rule(ip, host_port, other_port, protocol)
+@require_root
+def add(port_spec, destination, udp):
+    """Add a port forward: upf add PORT[/PROTOCOL] DEST_IP:DEST_PORT"""
+    try:
+        port, protocol = parse_port_spec(port_spec, udp)
+        dest_ip, dest_port = destination.split(":")
+
+        PortForward(port, protocol, dest_ip, int(dest_port)).insert()
+
+        click.echo(f"Added: {port} ({protocol}) → {dest_ip}:{dest_port}")
+    except ValueError as e:
+        click.echo(f"Error: {str(e)}")
 
 
 @cli.command()
-@click.argument("gateway")
-@click.argument("start_port", type=int)
+@click.argument("port_spec")
 @click.option("--udp", is_flag=True, help="Use UDP instead of TCP")
-@click.option(
-    "--dest-port", default=22, type=int, help="Destination port (default: 22)"
-)
-def add_range(gateway, start_port, udp, dest_port):
-    """Add a range of forwarding rules"""
-    protocol = "udp" if udp else "tcp"
-    add_multiple(gateway, start_port, protocol, dest_port)
+@require_root
+def remove(port_spec, udp):
+    """Remove a port forward"""
+    try:
+        port, protocol = parse_port_spec(port_spec, udp)
+        forward = PortForward.find(port, protocol)
+        if forward:
+            forward.delete()
+            click.echo(f"Removed: {port}")
+        else:
+            click.echo("Not found")
+    except ValueError as e:
+        click.echo(f"Error: {str(e)}")
 
 
 @cli.command()
 def list():
-    """List all port forwarding rules managed by UPF"""
-    list_rules()
+    """List all port forwards"""
+    rules = PortForward.all()
+    status = "active" if UPF.is_enabled() else "disabled"
+
+    click.echo(f"Status: {status}")
+    click.echo("Port                      Forward To")
+    click.echo("----                      ----------")
+
+    if not rules:
+        return
+
+    for rule in rules:
+        click.echo(
+            f"{rule.host_port}/{rule.protocol:<19} {rule.dest_ip}:{rule.dest_port}"
+        )
 
 
 @cli.command()
-@click.argument("host_port", type=int)
-@click.option("--udp", is_flag=True, help="Use UDP instead of TCP")
-def delete(host_port, udp):
-    """Delete a specific port forwarding rule"""
-    protocol = "udp" if udp else "tcp"
-    delete_rule(host_port, protocol)
+@require_root
+def prune():
+    """Remove all port forwarding rules"""
+    rules = PortForward.all()
+    count = 0
+
+    for rule in rules:
+        rule.delete()
+        count += 1
+        click.echo(f"Rule {rule.host_port}/{rule.protocol} removed")
+
+    click.echo(f"Removed {count} rules")
+
+
+@cli.command()
+@require_root
+def sync():
+    """Sync database with actual iptables rules"""
+    rules = subprocess.run(
+        ["iptables-save", "-t", "nat"], capture_output=True, text=True
+    ).stdout
+
+    pre_rules = {}
+    post_rules = {}
+
+    for line in rules.splitlines():
+        if "-A PREROUTING" in line:
+            match = re.search(
+                r"-A PREROUTING -p tcp -m tcp --dport (\d+).* -m comment --comment (upf-pre-\w+) -j DNAT --to-destination ([0-9\.]+):(\d+).*",
+                line,
+            )
+            if match:
+                port, pre_id, dest_ip, dest_port = match.groups()
+                pre_rules[pre_id.replace("upf-pre-", "")] = (
+                    int(port),
+                    dest_ip,
+                    int(dest_port),
+                )
+
+    # Parse POSTROUTING rules to validate pairs
+    for line in rules.splitlines():
+        if "-A POSTROUTING" in line:
+            match = re.search(
+                r"-A POSTROUTING -d ([0-9\.]+)/32 -p tcp -m tcp --dport (\d+).* -m comment --comment (upf-post-\w+) -j MASQUERADE",
+                line,
+            )
+            if match:
+                dest_ip, dest_port, post_id = match.groups()
+                post_rules[post_id.replace("upf-post-", "")] = (dest_ip, int(dest_port))
+
+    with Database.connect() as conn:
+        conn.execute("DELETE FROM port_forwards")
+        for id, (port, dest_ip, dest_port) in pre_rules.items():
+            if id in post_rules.keys():
+                conn.execute(
+                    """INSERT INTO port_forwards 
+                (host_port, protocol, dest_ip, dest_port, prerouting_rule_id, postrouting_rule_id, created_at, id)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)""",
+                    (
+                        port,
+                        "tcp",
+                        dest_ip,
+                        dest_port,
+                        f"upf-pre-{id}",
+                        f"upf-post-{id}",
+                        uuid.uuid4().hex,
+                    ),
+                )
+
+    click.echo(f"Synced {len(pre_rules)} rules")
+
+
+@cli.command()
+@click.argument("port_spec")
+@click.argument("target")
+@click.option("--start-at", type=int, default=2, help="Start at IP")
+@click.option("--max", type=int, default=24, help="Maximum forwards")
+@require_root
+def add_range(port_spec, target, start_at, max):
+    """Add port forwards: PORT[/PROTOCOL] GATEWAY/SUBNET:TARGET_PORT"""
+    try:
+        # Parse and validate source port/protocol
+        port, protocol = parse_port_spec(port_spec, False)
+        validate_port(port)
+        validate_start_at(start_at)
+
+        # Parse target specification
+        gateway_subnet, target_port = target.split(":")
+        gateway, subnet = gateway_subnet.split("/")
+        subnet = int(subnet)
+        validate_subnet(subnet)
+        validate_port(int(target_port))
+
+        # Parse and validate gateway IP
+        ip_parts = validate_ip(gateway)
+        available_ips = calculate_ip_range(subnet)
+        num_hosts = min(available_ips, max)
+        validate_port_range(port, num_hosts)
+
+        # Create port forwards
+        count = 0
+        for i in range(start_at, start_at + num_hosts):
+            if i > 254:  # Skip broadcast
+                break
+
+            current_ip_parts = ip_parts.copy()
+            current_ip_parts[3] = i
+            current_ip = ".".join(map(str, current_ip_parts))
+
+            try:
+                rule = PortForward(port + count, protocol, current_ip, int(target_port))
+                rule.insert()
+                click.echo(
+                    f"Added: {port + count} ({protocol}) → {current_ip}:{target_port}"
+                )
+                count += 1
+            except ValueError as e:
+                click.echo(f"Warning: {str(e)}")
+                continue
+
+        click.echo(f"Added {count} port forwards")
+
+    except ValueError as e:
+        click.echo(f"Error: {str(e)}")
+
+
+@cli.command()
+@require_root
+def enable():
+    """Enable port forwarding"""
+    UPF.enable()
+    click.echo("Port forwarding enabled")
+
+
+@cli.command()
+@require_root
+def disable():
+    """Disable port forwarding"""
+    UPF.disable()
+    click.echo("Port forwarding disabled")
