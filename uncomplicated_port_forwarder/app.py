@@ -33,7 +33,7 @@ def cli():
 @click.option("--udp", is_flag=True, help="Use UDP instead of TCP")
 @require_root
 def add(port_spec, destination, udp):
-    """Add a port forward: upf add PORT[/PROTOCOL] DEST_IP:DEST_PORT"""
+    """Add a port forward: upf add <port>[/<protocol>] <destination ip>:<destination port>"""
     try:
         port, protocol = parse_port_spec(port_spec, udp)
         dest_ip, dest_port = destination.split(":")
@@ -97,62 +97,62 @@ def prune():
     click.echo(f"Removed {count} rules")
 
 
-@cli.command()
-@require_root
-def sync():
-    """Sync database with actual iptables rules"""
-    rules = subprocess.run(
-        ["iptables-save", "-t", "nat"], capture_output=True, text=True
-    ).stdout
+# @cli.command()
+# @require_root
+# def sync():
+#     """Sync database with actual iptables rules"""
+#     rules = subprocess.run(
+#         ["iptables-save", "-t", "nat"], capture_output=True, text=True
+#     ).stdout
 
-    pre_rules = {}
-    post_rules = {}
+#     pre_rules = {}
+#     post_rules = {}
 
-    for line in rules.splitlines():
-        if "-A PREROUTING" in line:
-            match = re.search(
-                r"-A PREROUTING -p tcp -m tcp --dport (\d+).* -m comment --comment (upf-pre-\w+) -j DNAT --to-destination ([0-9\.]+):(\d+).*",
-                line,
-            )
-            if match:
-                port, pre_id, dest_ip, dest_port = match.groups()
-                pre_rules[pre_id.replace("upf-pre-", "")] = (
-                    int(port),
-                    dest_ip,
-                    int(dest_port),
-                )
+#     for line in rules.splitlines():
+#         if "-A PREROUTING" in line:
+#             match = re.search(
+#                 r"-A PREROUTING -p tcp -m tcp --dport (\d+).* -m comment --comment (upf-pre-\w+) -j DNAT --to-destination ([0-9\.]+):(\d+).*",
+#                 line,
+#             )
+#             if match:
+#                 port, pre_id, dest_ip, dest_port = match.groups()
+#                 pre_rules[pre_id.replace("upf-", "")] = (
+#                     int(port),
+#                     dest_ip,
+#                     int(dest_port),
+#                 )
 
-    # Parse POSTROUTING rules to validate pairs
-    for line in rules.splitlines():
-        if "-A POSTROUTING" in line:
-            match = re.search(
-                r"-A POSTROUTING -d ([0-9\.]+)/32 -p tcp -m tcp --dport (\d+).* -m comment --comment (upf-post-\w+) -j MASQUERADE",
-                line,
-            )
-            if match:
-                dest_ip, dest_port, post_id = match.groups()
-                post_rules[post_id.replace("upf-post-", "")] = (dest_ip, int(dest_port))
+#     # Parse POSTROUTING rules to validate pairs
+#     for line in rules.splitlines():
+#         if "-A FORWARD" in line:
+#             match = re.search(
+#                 r"-A FORWARD -d ([0-9\.]+)/32 -p tcp -m tcp --dport (\d+).* -m comment --comment (upf-post-\w+) -j MASQUERADE",
+#                 line,
+#             )
+#             if match:
+#                 dest_ip, dest_port, post_id = match.groups()
+#                 post_rules[post_id.replace("upf-", "")] = (dest_ip, int(dest_port))
 
-    with Database.connect() as conn:
-        conn.execute("DELETE FROM port_forwards")
-        for id, (port, dest_ip, dest_port) in pre_rules.items():
-            if id in post_rules.keys():
-                conn.execute(
-                    """INSERT INTO port_forwards 
-                (host_port, protocol, dest_ip, dest_port, prerouting_rule_id, postrouting_rule_id, created_at, id)
-                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)""",
-                    (
-                        port,
-                        "tcp",
-                        dest_ip,
-                        dest_port,
-                        f"upf-pre-{id}",
-                        f"upf-post-{id}",
-                        uuid.uuid4().hex,
-                    ),
-                )
+#     with Database.connect() as conn:
+#         conn.execute("DELETE FROM port_forwards")
+#         for id, (port, dest_ip, dest_port) in pre_rules.items():
+#             if id in post_rules.keys():
+#                 conn.execute(
+#                     """INSERT INTO port_forwards 
+#                 (host_port, protocol, dest_ip, dest_port, rule_id, created_at, id)
+#                 VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)""",
+#                     (
+#                         port,
+#                         "tcp",
+#                         dest_ip,
+#                         dest_port,
+#                         f"upf-pre-{id}",
+#                         f"upf-post-{id}",
+#                         uuid.uuid4().hex,
+#                     ),
+#                 )
 
-    click.echo(f"Synced {len(pre_rules)} rules")
+#     click.echo(f"Synced {len(pre_rules)} rules")
 
 
 @cli.command()
@@ -162,27 +162,23 @@ def sync():
 @click.option("--max", type=int, default=24, help="Maximum forwards")
 @require_root
 def add_range(port_spec, target, start_at, max):
-    """Add port forwards: PORT[/PROTOCOL] GATEWAY/SUBNET:TARGET_PORT"""
+    """Add port forwards: <port>[/<protocol>] <gateway>/<subnet>:<port>"""
     try:
-        # Parse and validate source port/protocol
         port, protocol = parse_port_spec(port_spec, False)
         validate_port(port)
         validate_start_at(start_at)
 
-        # Parse target specification
         gateway_subnet, target_port = target.split(":")
         gateway, subnet = gateway_subnet.split("/")
         subnet = int(subnet)
         validate_subnet(subnet)
         validate_port(int(target_port))
 
-        # Parse and validate gateway IP
         ip_parts = validate_ip(gateway)
         available_ips = calculate_ip_range(subnet)
         num_hosts = min(available_ips, max)
         validate_port_range(port, num_hosts)
 
-        # Create port forwards
         count = 0
         for i in range(start_at, start_at + num_hosts):
             if i > 254:  # Skip broadcast

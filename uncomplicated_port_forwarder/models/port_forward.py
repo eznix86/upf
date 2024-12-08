@@ -21,14 +21,12 @@ class PortForward:
     dest_port: int = None
     id: str = None
     created_at: datetime = None
-    prerouting_rule_id: str = None
-    postrouting_rule_id: str = None
+    rule_id: str = None
 
     def __post_init__(self):
         self.id = self.id or uuid.uuid4().hex
         self.created_at = self.created_at or datetime.now()
-        self.prerouting_rule_id = self.prerouting_rule_id or f"upf-pre-{self.id[:8]}"
-        self.postrouting_rule_id = self.postrouting_rule_id or f"upf-post-{self.id[:8]}"
+        self.rule_id = self.rule_id or f"upf-{self.id[:8]}"
 
     @staticmethod
     def find(host_port, protocol) -> Optional["PortForward"]:
@@ -36,7 +34,7 @@ class PortForward:
             rule = conn.execute(
                 """
                 SELECT host_port, protocol, dest_ip, dest_port, id, 
-                       created_at, prerouting_rule_id, postrouting_rule_id
+                       created_at, rule_id
                 FROM port_forwards
                 WHERE host_port = ? AND protocol = ?
             """,
@@ -53,7 +51,7 @@ class PortForward:
         with Database.connect(readonly=True) as conn:
             rows = conn.execute("""
                 SELECT host_port, protocol, dest_ip, dest_port, id, 
-                       created_at, prerouting_rule_id, postrouting_rule_id
+                       created_at, rule_id
                 FROM port_forwards
                 ORDER BY created_at DESC
             """).fetchall()
@@ -84,7 +82,7 @@ class PortForward:
                     """
                     INSERT INTO port_forwards 
                     (id, host_port, dest_ip, dest_port, protocol, created_at,
-                     prerouting_rule_id, postrouting_rule_id)
+                     rule_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
@@ -94,8 +92,7 @@ class PortForward:
                         self.dest_port,
                         self.protocol,
                         self.created_at,
-                        self.prerouting_rule_id,
-                        self.postrouting_rule_id,
+                        self.rule_id,
                     ),
                 )
                 if UPF.is_enabled():

@@ -16,9 +16,8 @@ def add_rule(port_forward: "PortForward") -> None:
             "-j", "DNAT",
             "--to-destination", f"{port_forward.dest_ip}:{port_forward.dest_port}",
             "-m", "comment",
-            "--comment", port_forward.prerouting_rule_id,
+            "--comment", port_forward.rule_id,
         ],
-        # FORWARD: Allow the forwarded traffic to be accepted and passed to the destination VM
         [
             "iptables", "-A", "FORWARD",
             "-p", port_forward.protocol,
@@ -27,7 +26,7 @@ def add_rule(port_forward: "PortForward") -> None:
             "-m", "state", "--state", "NEW,ESTABLISHED,RELATED",
             "-j", "ACCEPT",
             "-m", "comment",
-            "--comment", port_forward.forwarding_rule_id,
+            "--comment", port_forward.rule_id,
         ]
     ]
     
@@ -43,7 +42,7 @@ def delete_rule(port_forward: "PortForward") -> None:
             "-j", "DNAT",
             "--to-destination", f"{port_forward.dest_ip}:{port_forward.dest_port}",
             "-m", "comment",
-            "--comment", port_forward.prerouting_rule_id,
+            "--comment", port_forward.rule_id,
         ],
         [
             "iptables", "-D", "FORWARD",
@@ -53,7 +52,7 @@ def delete_rule(port_forward: "PortForward") -> None:
             "-m", "state", "--state", "NEW,ESTABLISHED,RELATED",
             "-j", "ACCEPT",
             "-m", "comment",
-            "--comment", port_forward.forwarding_rule_id,
+            "--comment", port_forward.rule_id,
         ]
     ]
     
@@ -67,7 +66,7 @@ def delete_rule(port_forward: "PortForward") -> None:
             "-j", "DNAT",
             "--to-destination", f"{port_forward.dest_ip}:{port_forward.dest_port}",
             "-m", "comment",
-            "--comment", port_forward.prerouting_rule_id,
+            "--comment", port_forward.rule_id,
         ],
         [
             "iptables", "-t", "nat", "-D", "POSTROUTING",
@@ -76,7 +75,7 @@ def delete_rule(port_forward: "PortForward") -> None:
             "--dport", str(port_forward.dest_port),
             "-j", "MASQUERADE",
             "-m", "comment",
-            "--comment", port_forward.postrouting_rule_id,
+            "--comment", port_forward.rule_id,
         ],
     ]
     for cmd in commands:

@@ -33,8 +33,7 @@ class TestPortForward:
     def test_post_init_generates_ids(self):
         pf = PortForward(host_port=80, protocol='tcp')
         assert len(pf.id) == 32
-        assert pf.prerouting_rule_id.startswith('upf-pre-')
-        assert pf.postrouting_rule_id.startswith('upf-post-')
+        assert pf.rule_id.startswith('upf-')
         assert isinstance(pf.created_at, datetime)
 
     def test_find_existing_rule(self, mock_db, sample_port_forward, mock_requires):

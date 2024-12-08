@@ -39,8 +39,7 @@ class Database:
                         dest_port INTEGER,
                         protocol TEXT,
                         created_at TIMESTAMP,
-                        prerouting_rule_id TEXT,
-                        postrouting_rule_id TEXT,
+                        rule_id TEXT,
                         UNIQUE(host_port, protocol)
                     )
                 """)
