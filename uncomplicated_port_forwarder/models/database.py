@@ -8,14 +8,18 @@ from datetime import datetime
 
 DB_PATH = Path("/var/lib/upf/upf.db")
 
+
 def adapt_datetime(dt: datetime) -> str:
     return dt.isoformat()
 
+
 def convert_datetime(s: bytes) -> datetime:
-    return datetime.fromisoformat(s.decode('utf-8'))
+    return datetime.fromisoformat(s.decode("utf-8"))
+
 
 sqlite3.register_adapter(datetime, adapt_datetime)
 sqlite3.register_converter("DATETIME", convert_datetime)
+
 
 class Database:
     @staticmethod
@@ -24,7 +28,9 @@ class Database:
             DB_PATH.parent.mkdir(parents=True, exist_ok=True)
             os.chmod(DB_PATH.parent, 0o755)
 
-            with sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES) as conn:
+            with sqlite3.connect(
+                DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
+            ) as conn:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS port_forwards (
                         id TEXT PRIMARY KEY,

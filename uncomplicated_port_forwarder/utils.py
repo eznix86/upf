@@ -7,12 +7,14 @@ import socket
 import psutil
 from functools import wraps
 
+
 def require_root(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         if os.geteuid() != 0:
             sys.exit("This command requires root privileges")
         return func(*args, **kwargs)
+
     return wrapper
 
 

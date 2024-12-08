@@ -12,6 +12,7 @@ from ..utils import validate_ip
 from .database import Database
 from ..iptables import add_rule, delete_rule
 
+
 @dataclass
 class PortForward:
     host_port: int = None

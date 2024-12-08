@@ -3,6 +3,7 @@
 
 from .database import Database
 
+
 class UPF:
     @staticmethod
     def is_enabled():
