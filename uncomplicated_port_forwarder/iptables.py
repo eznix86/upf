@@ -18,20 +18,47 @@ def add_rule(port_forward: "PortForward") -> None:
             "-m", "comment",
             "--comment", port_forward.prerouting_rule_id,
         ],
+        # FORWARD: Allow the forwarded traffic to be accepted and passed to the destination VM
         [
-            "iptables", "-t", "nat", "-A", "POSTROUTING",
+            "iptables", "-A", "FORWARD",
             "-p", port_forward.protocol,
             "-d", port_forward.dest_ip,
             "--dport", str(port_forward.dest_port),
-            "-j", "MASQUERADE",
+            "-m", "state", "--state", "NEW,ESTABLISHED,RELATED",
+            "-j", "ACCEPT",
             "-m", "comment",
-            "--comment", port_forward.postrouting_rule_id,
-        ],
+            "--comment", port_forward.forwarding_rule_id,
+        ]
     ]
+    
     for cmd in commands:
         subprocess.run(cmd, check=True)
 
 def delete_rule(port_forward: "PortForward") -> None:
+    commands = [
+        [
+            "iptables", "-t", "nat", "-D", "PREROUTING",
+            "-p", port_forward.protocol,
+            "--dport", str(port_forward.host_port),
+            "-j", "DNAT",
+            "--to-destination", f"{port_forward.dest_ip}:{port_forward.dest_port}",
+            "-m", "comment",
+            "--comment", port_forward.prerouting_rule_id,
+        ],
+        [
+            "iptables", "-D", "FORWARD",
+            "-p", port_forward.protocol,
+            "-d", port_forward.dest_ip,
+            "--dport", str(port_forward.dest_port),
+            "-m", "state", "--state", "NEW,ESTABLISHED,RELATED",
+            "-j", "ACCEPT",
+            "-m", "comment",
+            "--comment", port_forward.forwarding_rule_id,
+        ]
+    ]
+    
+    for cmd in commands:
+        subprocess.run(cmd, check=True)
     commands = [
         [
             "iptables", "-t", "nat", "-D", "PREROUTING",
